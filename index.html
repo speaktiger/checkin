@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#dbe6f6">
+<title>SpeakTiger check-in</title>
+<style>
+  :root {
+    --bg:      #dbe6f6;
+    --card:    #ffffff;
+    --fg:      #14161c;
+    --dim:     #38445c;
+    --muted:   #78849a;
+    --line:    #b9c9e2;
+    --accent:  #3d81e8;
+    --move:    #b84ae0;   /* purple, exactly the guest app's */
+    --stay:    #f0cf3a;   /* yellow */
+    --onmove:  #ffffff;
+    --onstay:  #14161c;
+    --good:    #2f7a4a;
+    --warn:    #c2410c;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  button { font: inherit; border: 0; cursor: pointer; }
+
+  /* ---------- header ---------- */
+  header {
+    flex: 0 0 auto; background: var(--card); border-bottom: 1px solid var(--line);
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  }
+  .top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .count { font-size: 22px; font-weight: 850; letter-spacing: -.02em; }
+  .count small { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: .04em; }
+  .parity { font-size: 13px; font-weight: 850; text-transform: uppercase; letter-spacing: .1em; }
+  .parity.odd  { color: var(--warn); }
+  .parity.even { color: var(--good); }
+
+  .last { display: flex; align-items: center; gap: 8px; margin-top: 8px; min-height: 34px; }
+  .last-txt { flex: 1; font-size: 13px; color: var(--dim); font-weight: 600; }
+  .last-txt b { color: var(--fg); display: block; }
+  .last-txt i { font-style: normal; display: block; }
+  #undo {
+    background: var(--bg); color: var(--dim); border-radius: 10px;
+    padding: 8px 12px; font-size: 13px; font-weight: 800;
+  }
+  #undo:disabled { opacity: .35; }
+  #save, #push { background: var(--bg); color: var(--dim); border-radius: 10px;
+                 padding: 8px 12px; font-size: 13px; font-weight: 800; }
+  #push { background: var(--accent); color: #fff; }
+  #push:disabled { background: var(--bg); color: var(--dim); opacity: .45; }
+  #banner.info { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .74; } }
+  @media (prefers-reduced-motion: reduce) { #banner.info { animation: none; } }
+
+  #sync { margin-top: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  #sync.pending { color: var(--warn); }
+  #sync.saved   { color: var(--good); }
+
+  #q {
+    width: 100%; margin-top: 10px; padding: 13px 14px; font-size: 17px;
+    border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--fg);
+  }
+  #q:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  /* ---------- list ---------- */
+  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 10px 12px 24px; }
+  .row {
+    display: flex; align-items: center; gap: 12px; background: var(--card);
+    border-radius: 14px; padding: 12px 14px; margin-bottom: 8px;
+  }
+  .row.done { background: #eaf4ec; }
+  .who { flex: 1; min-width: 0; }
+  .nm { font-size: 19px; font-weight: 800; letter-spacing: -.01em; overflow-wrap: anywhere; }
+  .row.done .nm { color: var(--good); }
+  /* Secondary by design — it exists to tell two people of the same name apart,
+     which is exactly when truncating it is worst. Side by side when they fit,
+     stacked when they don't, never cut. */
+  /* One per line, always. Wrapping only when they did not fit made the list
+     ragged — some rows two lines, some three, depending on the address. */
+  .meta { margin-top: 2px; font-size: 12.5px; color: var(--muted); font-weight: 600;
+          display: flex; flex-direction: column; gap: 1px; overflow-wrap: anywhere; }
+  .go {
+    flex: 0 0 auto; background: var(--accent); color: #fff; border-radius: 11px;
+    padding: 12px 16px; font-size: 15px; font-weight: 800;
+    transition: transform .12s ease, filter .12s ease;
+  }
+  .go.pressed { transform: scale(.95); filter: brightness(.9); transition-duration: 0s; }
+  .row.done .go { background: #d8e6dc; color: var(--good); }
+  .seatn { font-size: 12px; font-weight: 800; color: var(--good); white-space: nowrap; }
+  .empty { text-align: center; color: var(--muted); font-weight: 700; padding: 40px 20px; }
+
+  /* ---------- the sticky card ---------- */
+  #card {
+    position: fixed; inset: 0; z-index: 30; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 4vh;
+    padding: 24px;
+  }
+  #card[hidden] { display: none; }
+  #card.purple { background: var(--move); color: var(--onmove); }
+  #card.yellow { background: var(--stay); color: var(--onstay); }
+  #card .lbl { font-size: clamp(18px, 5vw, 30px); font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+  #card .tbl { font-size: clamp(90px, 42vw, 300px); font-weight: 900; line-height: .9; letter-spacing: -.04em; }
+  #card .nm2 { font-size: clamp(16px, 4.4vw, 26px); font-weight: 750; opacity: .85; text-align: center; }
+  #cardclose {
+    background: rgba(255,255,255,.92); color: var(--fg); border-radius: 14px;
+    padding: 16px 44px; font-size: 18px; font-weight: 850;
+  }
+  #card.yellow #cardclose { background: rgba(20,22,28,.9); color: #fff; }
+
+  #banner {
+    flex: 0 0 auto; background: var(--warn); color: #fff; text-align: center;
+    padding: 8px 12px; font-size: 13px; font-weight: 800;
+  }
+  #banner[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<div id="banner" hidden></div>
+
+<header>
+  <div class="top">
+    <div class="count"><span id="n">0</span> <small>of <span id="total">0</span> checked in</small></div>
+    <div class="parity" id="parity"></div>
+  </div>
+  <div class="last">
+    <div class="last-txt" id="last">No check-ins yet.</div>
+    <button id="undo" type="button" disabled>Undo</button>
+    <button id="push" type="button" title="Save the current state to the sheet now">Save</button>
+    <button id="save" type="button" title="Export a CSV of everything this phone knows">Export</button>
+  </div>
+  <div id="sync">Loading…</div>
+  <input id="q" type="search" placeholder="Search name, email or phone"
+         autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+</header>
+
+<main id="list"></main>
+
+<div id="card" hidden>
+  <div class="lbl" id="cardcolour"></div>
+  <div class="tbl" id="cardtable"></div>
+  <div class="nm2" id="cardname"></div>
+  <button id="cardclose" type="button">Done</button>
+</div>
+
+<script>
+/* ===========================================================================
+   SpeakTiger check-in
+   ---------------------------------------------------------------------------
+   ONE WRITER. The phone owns who sits where; the sheet records it.
+
+   What goes to the sheet is the whole assignment map, not a list of actions.
+   A snapshot is idempotent, so sending the SAME one twice costs nothing — no
+   queue, nothing to order, nothing that can block behind a rejection. Ten
+   offline changes are still one write, because what is written is the state.
+
+   Idempotence does not make two DIFFERENT snapshots safe to reorder, which an
+   earlier comment here claimed. Each carries a counter and the sheet ignores
+   anything older than it has already accepted.
+
+   Structure comes from the sheet every load: the guest list and the seating
+   plan. Assignments come from the cache when it holds unsaved work, and from
+   the sheet otherwise. Columns E and I are written, never read back.
+   =========================================================================== */
+
+const API = "https://script.google.com/macros/s/AKfycbz1Rv9dOJM3C_REAckYe173wJ3-hmAH23llLRs85EP-HTlYWCVfEAb6l_WWd8a212Qv/exec";
+
+const params = new URLSearchParams(location.search);
+const TAB = params.get("tab") || "";
+const KEY = params.get("k")   || "";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/* Folded the same way the sheet's builder sorts, so what the host types matches
+   what they see. NFD alone misses these: Ł ø ß have no combining form. */
+const fold = (s) => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/\u0141/g, "L").replace(/\u0142/g, "l")
+  .replace(/\u00d8/g, "O").replace(/\u00f8/g, "o")
+  .replace(/\u00c6/g, "AE").replace(/\u00e6/g, "ae")
+  .replace(/\u00df/g, "ss").toLowerCase();
+
+const CACHE_V = 3;                       /* the shape of the cache, not the data */
+const KEEP_MS = 72 * 60 * 60 * 1000;
+const READ_MS = 5000;                    /* a read blocks the screen, so give up early */
+/* A write does not: check-in is instant and local, and this runs behind it. The
+   5s it used to share with reads bought nothing and created the one race worth
+   caring about — abandoning a write that was still alive, so it could land
+   after a newer one. */
+/* Was 30s, to avoid abandoning a write the server might still be running — a
+   write that landed late used to overwrite newer state. The sequence counter
+   now refuses a late write outright, so the phone can give up sooner and say
+   so, instead of looking dead for half a minute. */
+const WRITE_MS = 12000;
+const CACHE   = () => "st_checkin_" + TAB;
+
+let guests = [], seats = [];             /* structure — always from the sheet */
+let seated = {};                         /* guestId -> seat row. The whole state. */
+let rev = "", status = "open", savedAt = "";
+let seq = 0;                             /* which snapshot is newest; only ever rises */
+let dirty = false;                       /* holds work the sheet has not confirmed */
+let loaded = false, busy = false, wanted = false;
+let bannerKind = "";
+let saving = false;                      /* a write is in flight right now */
+let wake = null;                         /* screen wake lock */
+/* Whether the last SAVE was refused — not whether a banner happens to look
+   serious. The retry loop used to read bannerKind, so a local message like
+   "No seats left" silenced retries of a perfectly good pending snapshot. */
+let saveRefused = false;
+let refetch = false;                /* re-read the sheet once after a refusal */
+
+/* ------------------------------------------------------------------ state -- */
+
+const seatOf = (id) => (seated[id] === undefined ? null : Number(seated[id]));
+const arrivedCount = () => Object.keys(seated).length;
+
+function takenRows() {
+  const t = new Set();
+  for (const id in seated) t.add(Number(seated[id]));
+  return t;
+}
+function nextSeat() {
+  const taken = takenRows();
+  return seats.find((s) => !taken.has(s.row)) || null;
+}
+/* Seats are consumed in order, so the last check-in holds the last occupied
+   seat. Derived, so it survives a reload and cannot drift from the state. */
+function lastOccupied() {
+  const taken = takenRows();
+  for (let i = seats.length - 1; i >= 0; i--) if (taken.has(seats[i].row)) return seats[i];
+  return null;
+}
+function guestAtSeat(row) {
+  for (const id in seated) if (Number(seated[id]) === row) return guests.find((g) => g.id === id) || null;
+  return null;
+}
+
+/* ------------------------------------------------------------------ cache -- */
+
+function save() {
+  try {
+    localStorage.setItem(CACHE(), JSON.stringify({
+      v: CACHE_V, t: Date.now(), rev: rev, seq: seq, seated: seated, dirty: dirty,
+      /* structure too, or a cold offline open has nothing to render */
+      status: status, savedAt: savedAt, guests: guests, seats: seats
+    }));
+  } catch (e) {}
+}
+function loadCache() {
+  try {
+    const r = JSON.parse(localStorage.getItem(CACHE()));
+    if (!r || r.v !== CACHE_V || !Number.isFinite(r.t) || Date.now() - r.t > KEEP_MS) {
+      localStorage.removeItem(CACHE());
+      return null;
+    }
+    return r;
+  } catch (e) { return null; }
+}
+/* Every event leaves an entry behind and only the tab being opened was ever
+   checked for expiry, so the rest stayed forever. */
+function sweepCaches() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k || k.indexOf("st_checkin_") !== 0) continue;
+      let t = 0;
+      try { t = (JSON.parse(localStorage.getItem(k)) || {}).t || 0; } catch (e) {}
+      if (!Number.isFinite(t) || Date.now() - t > KEEP_MS) localStorage.removeItem(k);
+    }
+  } catch (e) {}
+}
+
+/* -------------------------------------------------------------- transport -- */
+
+function withDeadline(promise, ctrl, ms) {
+  return new Promise(function (resolve, reject) {
+    const t = setTimeout(function () {
+      try { ctrl.abort(); } catch (e) {}
+      reject(new Error("the sheet did not answer in " + (ms / 1000) + "s"));
+    }, ms);
+    promise.then((v) => { clearTimeout(t); resolve(v); },
+                 (e) => { clearTimeout(t); reject(e); });
+  });
+}
+
+async function pull() {
+  const ctrl = new AbortController();
+  const res = await withDeadline(
+    fetch(API + "?tab=" + encodeURIComponent(TAB), { cache: "no-store", signal: ctrl.signal }),
+    ctrl, READ_MS);
+  const data = await res.json();
+  /* Carry the flag: a refusal from the sheet and an unreachable sheet need
+     different words, even though both fall back to the cache. */
+  if (data.error) { const err = new Error(data.error); err.hard = !!data.hard; throw err; }
+
+  guests = data.guests || [];
+  seats  = data.seats  || [];
+  status = data.status || "open";
+  savedAt = data.savedAt || "";
+
+  const cached = loadCache();
+  const sameEvent = cached && String(cached.rev || "") === String(data.rev || "");
+  const serverSeq = Number(data.seq || 0);
+
+  /* The counter travels with the state it belongs to — never the cache's
+     assignments stamped with the sheet's higher counter, which would write old
+     state labelled newest and reintroduce exactly what the counter prevents.
+     A cache holding unsaved work is ahead of the sheet by construction; there
+     is no other writer. Anything else, the sheet is at least as current. */
+  if (sameEvent && cached.dirty && Number(cached.seq || 0) >= serverSeq) {
+    seated = cached.seated || {};
+    seq = Number(cached.seq || 0);
+    dirty = true;
+  } else {
+    seated = data.seated || {};
+    seq = serverSeq;
+    dirty = false;
+  }
+  rev = String(data.rev || "");
+
+  /* an assignment pointing at a seat the plan no longer has cannot be shown */
+  const rows = new Set(seats.map((s) => s.row));
+  let dropped = 0;
+  /* Only when nothing is pending. Dropping an assignment the sheet has never
+     seen would lose it for good — and the refusal message tells the host to
+     restore G/H, which they cannot do if reading the sheet already threw the
+     assignment away. Unsavable but visible beats silently gone. */
+  if (!dirty) {
+    for (const id in seated) if (!rows.has(Number(seated[id]))) { delete seated[id]; dropped++; }
+  }
+
+  loaded = true;
+  /* A read that lands retracts what a READ last said — unreachable, malformed.
+     It says nothing about a refused save, and the re-read that follows a
+     refusal would otherwise wipe the message explaining it. That clears when
+     the save itself succeeds. A notice is about something already done. */
+  if (bannerKind !== "notice" && !saveRefused) setBanner("");
+  /* after the clear above, not before: this must not be the thing that gets
+     cleared. Silently losing someone's seat is not something to do quietly. */
+  if (dropped) setBanner(dropped + (dropped === 1 ? " assignment was" : " assignments were") +
+    " removed — those seats are no longer in the plan. Tap to dismiss.", "notice");
+  save();
+}
+
+async function push() {
+  const ctrl = new AbortController();
+  const res = await withDeadline(fetch(API, {
+    method: "POST", redirect: "follow", signal: ctrl.signal,
+    headers: { "Content-Type": "text/plain;charset=utf-8" },   /* avoids preflight */
+    body: JSON.stringify({ key: KEY, tab: TAB, rev: rev, seq: seq, seated: seated, guestCount: guests.length })
+  }), ctrl, WRITE_MS);
+  const out = await res.json();
+  /* The endpoint says whether it refused on purpose. Treating every JSON error
+     as permanent was wrong: respond() also catches what Google raises — a lock
+     timeout, a transient Sheets failure — and stopping the retry on one of
+     those would leave an event unsaved with nothing prompting another attempt.
+     Unmarked means retry, which is the harmless direction. */
+  if (out.error) { const err = new Error(out.error); err.hard = !!out.hard; throw err; }
+  savedAt = out.savedAt || savedAt;
+  return out;
+}
+
+/* One gate, so a read and a write never overlap, and a request made while it is
+   held is remembered rather than lost. */
+async function sync() {
+  if (busy) { wanted = true; return; }
+  if (!loaded || !dirty) return;
+  busy = true; saving = true;
+  /* A retry means the previous failure is no longer current news, and the bar
+     is where the host is already looking — the status line was too quiet to
+     notice. If this attempt fails too, its reason replaces this. */
+  setBanner("Saving…", "info");
+  render();
+  try {
+    const before = JSON.stringify(seated);
+    await push();
+    /* only clean if nothing changed while the write was in flight */
+    if (JSON.stringify(seated) === before) dirty = false;
+    /* A save proves the connection and clears a refusal, but says nothing about
+       a notice describing something that already happened at load — which used
+       to be wiped a few hundred milliseconds after it appeared. */
+    if (bannerKind !== "notice") setBanner("");
+    saveRefused = false;
+    save();
+  } catch (e) {
+    saveRefused = !!e.hard;
+    refetch = !!e.hard;
+    setBanner(e.message, e.hard ? "hard" : "net");
+  } finally {
+    busy = false; saving = false; render();
+    /* A refusal means the sheet is not what we assumed — its status or its
+       seating plan may have changed. One read to find out, and only one, so it
+       cannot chase its own tail. */
+    if (refetch) { refetch = false; setTimeout(reload, 0); }
+    if (wanted) { wanted = false; setTimeout(sync, 0); }
+  }
+}
+
+/* Structure and status, without touching the queue of intent. Used when the
+   phone comes back to life: a seat added to G/H or a status flipped to done is
+   picked up without the host having to reload. */
+async function reload() {
+  if (busy) { wanted = true; return; }
+  busy = true;
+  try { await pull(); } catch (e) {} finally { busy = false; render(); }
+  if (dirty) sync();
+}
+
+/* ----------------------------------------------------------------- action -- */
+
+function checkIn(guest) {
+  if (status === "done") return;
+  if (seatOf(guest.id) !== null) return;
+  const seat = nextSeat();
+  if (!seat) { setBanner("No seats left in the plan — add rows to the sheet.", "hard"); return; }
+  if (seat.colour !== "purple" && seat.colour !== "yellow") {
+    setBanner('Seat at table ' + seat.table + ' has colour "' + seat.colour + '" — fix the sheet.', "hard");
+    return;
+  }
+  seated[guest.id] = seat.row;
+  seq++; dirty = true; save();
+  showCard(seat, guest); render(); sync();
+}
+
+function undo() {
+  if (status === "done") return;
+  const seat = lastOccupied();
+  if (!seat) return;
+  const g = guestAtSeat(seat.row);
+  if (!g) return;
+  delete seated[g.id];
+  seq++; dirty = true; save(); render(); sync();
+}
+
+/* A host holding the door does not want the screen dimming between guests.
+   The lock needs a real gesture, and iOS drops it whenever the page is hidden,
+   so it is taken on any tap and taken again on return. */
+async function keepAwake() {
+  try {
+    if (!("wakeLock" in navigator) || wake || document.hidden) return;
+    wake = await navigator.wakeLock.request("screen");
+    wake.addEventListener("release", () => { wake = null; });
+  } catch (e) { wake = null; }
+}
+document.addEventListener("pointerdown", keepAwake, { passive: true });
+
+/* ------------------------------------------------------------------- view -- */
+
+function showCard(seat, guest) {
+  const c = $("card");
+  c.className = seat.colour;
+  $("cardcolour").textContent = seat.colour === "yellow" ? "Yellow" : "Purple";
+  $("cardtable").textContent = seat.table;
+  $("cardname").textContent = guest.name;
+  c.hidden = false;
+}
+$("cardclose").onclick = () => { $("card").hidden = true; $("q").value = ""; render(); };
+
+/* Tagged, so a recovered connection clears only the connectivity message and
+   leaves a genuine one alone. */
+function setBanner(msg, kind) {
+  bannerKind = msg ? (kind || "") : "";
+  const b = $("banner");
+  b.hidden = !msg;
+  b.className = bannerKind === "info" ? "info" : "";
+  b.textContent = msg || "";
+}
+
+function render() {
+  const n = arrivedCount();
+  $("n").textContent = n;
+  $("total").textContent = guests.length;
+  const p = $("parity");
+  p.textContent = n === 0 ? "" : (n % 2 ? "odd" : "even");
+  p.className = "parity " + (n % 2 ? "odd" : "even");
+
+  const seat = lastOccupied();
+  const who  = seat ? guestAtSeat(seat.row) : null;
+  if (seat && who) {
+    $("last").innerHTML = "Last: <b>" + esc(who.name) + "</b><i>" +
+      esc(seat.colour) + " table " + esc(seat.table) + "</i>";
+  } else {
+    $("last").textContent = loaded ? "No check-ins yet." : "Loading…";
+  }
+  $("undo").disabled = !(seat && who) || status === "done";
+
+  const st = $("sync");
+  if (!loaded)            { st.className = "";        st.textContent = "Loading…"; }
+  else if (status === "done") { st.className = "";    st.textContent = "Event finished — check-in disabled"; }
+  /* The step that was missing. A write can take seconds on venue wifi, and
+     calling that "Not saved" reads as broken when it is simply in progress. */
+  else if (saving)        { st.className = "";        st.textContent = "Saving…"; }
+  else if (dirty)         { st.className = "pending"; st.textContent = "Not saved" + (savedAt ? " — last saved " + savedAt : ""); }
+  else                    { st.className = "saved";   st.textContent = "Saved" + (savedAt ? " " + savedAt : ""); }
+  $("push").disabled = saving || !dirty || status === "done";
+  $("push").textContent = saving ? "Saving…" : "Save";
+
+  const q = fold($("q").value.trim());
+  const shown = q ? guests.filter((g) =>
+    fold(g.name).includes(q) || fold(g.email).includes(q) || fold(g.phone).includes(q)) : guests;
+
+  if (!shown.length) {
+    $("list").innerHTML = '<div class="empty">' + (loaded ? "No one matches that." : "") + "</div>";
+    return;
+  }
+  $("list").innerHTML = shown.map((g) => {
+    const row = seatOf(g.id);
+    const s = row ? seats.find((x) => x.row === row) : null;
+    const meta = [g.email, g.phone].filter(Boolean)
+      .map((v) => "<span>" + esc(v) + "</span>").join("");
+    return '<div class="row' + (row ? " done" : "") + '" data-id="' + esc(g.id) + '">' +
+      '<div class="who"><div class="nm">' + esc(g.name) + "</div>" +
+      (meta ? '<div class="meta">' + meta + "</div>" : "") + "</div>" +
+      (row
+        ? '<div class="seatn">' + esc(s ? s.colour + " " + s.table : "in") + "</div>"
+        : '<button class="go" type="button"' + (status === "done" ? " disabled" : "") + ">Check in</button>") +
+      "</div>";
+  }).join("");
+}
+
+/* ----------------------------------------------------------------- export -- */
+
+/* Everything this phone believes, including anything the sheet has never seen.
+   Both columns are rebuilt from the same state, so the file is consistent even
+   if nothing was ever saved. */
+function csvCell(v) {
+  const s = String(v == null ? "" : v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function buildCSV() {
+  const rows = [["guest_id", "name", "email", "phone", "check-in", "", "colour", "table", "guest"]];
+  const n = Math.max(guests.length, seats.length);       /* two independent blocks */
+  for (let i = 0; i < n; i++) {
+    const g = guests[i], s = seats[i];
+    const row = g ? seatOf(g.id) : null;
+    const seat = row ? seats.find((x) => x.row === row) : null;
+    const occ = s ? guestAtSeat(s.row) : null;
+    rows.push([
+      g ? g.id : "", g ? g.name : "", g ? g.email : "", g ? g.phone : "",
+      seat ? seat.colour + " " + seat.table : "", "",
+      s ? s.colour : "", s ? s.table : "", occ ? occ.name : ""
+    ]);
+  }
+  return rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+async function exportCSV() {
+  const name = (TAB || "checkin") + "-backup.csv";
+  const text = buildCSV();
+  const file = new File([text], name, { type: "text/csv" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (e) { if (e && e.name === "AbortError") return; }
+  }
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+$("save").onclick = exportCSV;
+$("push").onclick = () => { if (dirty) sync(); };
+
+/* one listener for the whole list, so re-rendering never leaves handlers behind */
+$("list").addEventListener("click", (e) => {
+  const btn = e.target.closest(".go");
+  if (!btn || btn.disabled) return;
+  const g = guests.find((x) => x.id === btn.closest(".row").dataset.id);
+  if (g) checkIn(g);
+});
+$("list").addEventListener("pointerdown", (e) => {
+  const btn = e.target.closest(".go");
+  if (btn) { btn.classList.add("pressed"); setTimeout(() => btn.classList.remove("pressed"), 140); }
+});
+$("q").addEventListener("input", render);
+$("undo").onclick = undo;
+
+/* ------------------------------------------------------------------- boot -- */
+
+(async function start() {
+  if (!TAB) { setBanner("No event given. Add ?tab=your-tab-name to the URL.", "hard"); return; }
+  sweepCaches();
+
+  try {
+    await pull();
+  } catch (e) {
+    /* No sheet. Only a cache holding unsaved work is worth showing — a clean one
+       has nothing the sheet lacks, and structure has to come from the sheet. */
+    /* The fallback is the same either way — locking the host out of the door
+       over a spreadsheet cell would be far worse than working from the last
+       good copy, and a save will refuse with the same reason anyway. Only the
+       wording differs, so nobody goes to check their wifi over a blank K2. */
+    const cached = loadCache();
+    if (cached && cached.guests && cached.guests.length) {
+      guests = cached.guests; seats = cached.seats || [];
+      seated = cached.seated || {}; rev = String(cached.rev || "");
+      status = cached.status || "open"; savedAt = cached.savedAt || "";
+      seq = Number(cached.seq || 0);
+      dirty = !!cached.dirty; loaded = true;
+      setBanner(e.hard
+        ? "Sheet problem — " + e.message + " Working from the last saved copy."
+        : "Working offline — " + e.message, e.hard ? "hard" : "net");
+    } else {
+      setBanner(e.hard ? "Sheet problem — " + e.message
+                       : "Cannot reach the sheet: " + e.message, e.hard ? "hard" : "net");
+    }
+  }
+  render();
+  if (dirty) sync();
+
+  /* Not polling: this only reaches the network when the phone holds unsaved
+     work, which is the retry the offline model depends on. */
+  /* Backs off only when the sheet itself refused. Every other trigger — a
+     check-in, Save, reconnecting, reopening — still attempts regardless. */
+  setInterval(() => { if (dirty && !saveRefused) sync(); }, 8000);
+  window.addEventListener("online", reload);
+  window.addEventListener("pageshow", reload);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    keepAwake();          /* iOS drops the lock while hidden */
+    reload();
+  });
+
+  /* Registration used to fail in silence, so a missing or stale sw.js looked
+     exactly like a working one until the first offline reload. */
+  const swState = () => {
+    const on = navigator.serviceWorker && navigator.serviceWorker.controller;
+    $("build").textContent = "build " + BUILD + " · " + (on ? "offline ready" : "offline not ready");
+  };
+  swState();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      /* Take the update now rather than on some later visit — otherwise a
+         redeploy is invisible until the tab has been closed twice. */
+      if (reg.waiting) reg.waiting.postMessage("claim");
+      reg.addEventListener("updatefound", () => {
+        const w = reg.installing;
+        if (w) w.addEventListener("statechange", () => {
+          if (w.state === "installed" && navigator.serviceWorker.controller) w.postMessage("claim");
+        });
+      });
+      swState();
+    }).catch(() => {
+      $("build").textContent = "build " + BUILD + " · offline unavailable (sw.js not found)";
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", swState);
+  } else {
+    $("build").textContent = "build " + BUILD + " · offline unsupported";
+  }
+})();
+
+</script>
+</body>
+</html>
